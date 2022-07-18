@@ -68,8 +68,8 @@ def get_token_config(model):
         "eos": model.eos,
         "list": model.token_list
     }
-    if hasattr(model, "blank"):
-        ret.update(blank=blank_id)
+    if hasattr(model, "blank_id"):
+        ret.update(blank=model.blank_id)
     return ret
 
 
