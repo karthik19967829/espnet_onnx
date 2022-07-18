@@ -14,6 +14,7 @@ import torch
 from onnxruntime.quantization import quantize_dynamic
 
 from espnet2.bin.asr_inference import Speech2Text
+from espnet2.bin.st_inference import Speech2Text as STSpeech2Text
 from espnet2.text.sentencepiece_tokenizer import SentencepiecesTokenizer
 from espnet_model_zoo.downloader import ModelDownloader
 from .models import (
@@ -57,7 +58,7 @@ class ASRModelExport:
 
     def export(
         self,
-        model: Speech2Text,
+        model: Union[Speech2Text, STSpeech2Text],
         tag_name: str = None,
         quantize: bool = False,
         optimize: bool = False,
@@ -72,41 +73,47 @@ class ASRModelExport:
         base_dir = self.cache_dir / tag_name.replace(' ', '-')
         export_dir = base_dir / 'full'
         export_dir.mkdir(parents=True, exist_ok=True)
+        
+        # support ST model
+        if hasattr(model, 'asr_model'):
+            asr_model = model.asr_model
+        else:
+            # ST
+            asr_model = model.st_model
 
         # copy model files
-        self._copy_files(model, base_dir, verbose)
-
-        model_config = self._create_config(model, export_dir)
+        self._copy_files(model, asr_model, base_dir, verbose)
+        model_config = self._create_config(model, asr_model, export_dir)
 
         # export encoder
-        enc_model = get_encoder(model.asr_model.encoder, self.export_config)
+        enc_model = get_encoder(asr_model.encoder, self.export_config)
         enc_out_size = enc_model.get_output_size()
         self._export_encoder(enc_model, export_dir, verbose)
         model_config.update(encoder=enc_model.get_model_config(
-            model.asr_model, export_dir))
+            asr_model, export_dir))
 
         # # export decoder
-        dec_model = get_decoder(model.asr_model.decoder, self.export_config)
+        dec_model = get_decoder(asr_model.decoder, self.export_config)
         self._export_decoder(dec_model, enc_out_size, export_dir, verbose)
         model_config.update(decoder=dec_model.get_model_config(export_dir))
         
         # export joint_network if transducer decoder is used.
-        if model.asr_model.use_transducer_decoder:
+        if hasattr(asr_model, 'use_transducer_decoder') and asr_model.use_transducer_decoder:
             joint_network = JointNetwork(
-                model.asr_model.joint_network,
+                asr_model.joint_network,
                 model_config['beam_search']['search_type'],
             )
             self._export_joint_network(joint_network, export_dir, verbose)
             model_config.update(joint_network=joint_network.get_model_config(export_dir))
 
         # export ctc
-        ctc_model = CTC(model.asr_model.ctc.ctc_lo)
+        ctc_model = CTC(asr_model.ctc.ctc_lo)
         self._export_ctc(ctc_model, enc_out_size, export_dir, verbose)
         model_config.update(ctc=ctc_model.get_model_config(export_dir))
 
         # export lm
         lm_model = None
-        if not model.asr_model.use_transducer_decoder:
+        if not hasattr(asr_model, 'use_transducer_decoder') or not asr_model.use_transducer_decoder:
             if 'lm' in model.beam_search.scorers.keys():
                 lm_model = get_lm(model.beam_search.scorers['lm'], self.export_config)
         else:
@@ -162,7 +169,10 @@ class ASRModelExport:
         optimize: bool = False,
     ):
         assert check_argument_types()
-        model = Speech2Text.from_pretrained(tag_name)
+        try:
+            model = Speech2Text.from_pretrained(tag_name)
+        except:
+            model = STSpeech2Text.from_pretrained(tag_name)
         self.export(model, tag_name, quantize, optimize)
     
     def export_from_zip(
@@ -183,9 +193,9 @@ class ASRModelExport:
         for k, v in kwargs.items():
             self.export_config[k] = v
 
-    def _create_config(self, model, path):
+    def _create_config(self, model, asr_model, path):
         ret = {}
-        if not model.asr_model.use_transducer_decoder:
+        if not hasattr(asr_model, 'use_transducer_decoder') or not asr_model.use_transducer_decoder:
             if "ngram" in list(model.beam_search.full_scorers.keys()) \
                     + list(model.beam_search.part_scorers.keys()):
                 ret.update(ngram=get_ngram_config(model))
@@ -200,9 +210,10 @@ class ASRModelExport:
             ret.update(beam_search=get_trans_beam_config(
                 model.beam_search_transducer
             ))
-            
-        ret.update(transducer=dict(use_transducer_decoder=model.asr_model.use_transducer_decoder))
-        ret.update(token=get_token_config(model.asr_model))
+        
+        if hasattr(model, "beam_search_transducer"):
+            ret.update(transducer=dict(use_transducer_decoder=asr_model.use_transducer_decoder))
+        ret.update(token=get_token_config(asr_model))
         ret.update(tokenizer=get_tokenizer_config(model.tokenizer, path))
         return ret
     
@@ -254,11 +265,11 @@ class ASRModelExport:
             logging.info(f'JointNetwork model is saved in {file_name}')
         self._export_model(model, verbose, path)
         
-    def _copy_files(self, model, path, verbose):
+    def _copy_files(self, model, asr_model, path, verbose):
         # copy stats file
-        if model.asr_model.normalize is not None \
-                and hasattr(model.asr_model.normalize, 'stats_file'):
-            stats_file = model.asr_model.normalize.stats_file
+        if asr_model.normalize is not None \
+                and hasattr(asr_model.normalize, 'stats_file'):
+            stats_file = asr_model.normalize.stats_file
             shutil.copy(stats_file, path)
             if verbose:
                 logging.info(f'`stats_file` was copied into {path}.')
@@ -271,10 +282,10 @@ class ASRModelExport:
                 logging.info(f'bpemodel was copied into {path}.')
             
         # save position encoder parameters.
-        if hasattr(model.asr_model.encoder, 'pos_enc'):
+        if hasattr(asr_model.encoder, 'pos_enc'):
             np.save(
                 path / 'pe',
-                model.asr_model.encoder.pos_enc.pe.numpy()
+                asr_model.encoder.pos_enc.pe.numpy()
             )
             if verbose:
                 logging.info(f'Matrix for position encoding was copied into {path}.')
