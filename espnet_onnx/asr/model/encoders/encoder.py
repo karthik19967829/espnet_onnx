@@ -11,7 +11,8 @@ from espnet_onnx.asr.frontend.normalize.global_mvn import GlobalMVN
 from espnet_onnx.asr.frontend.normalize.utterance_mvn import UtteranceMVN
 from espnet_onnx.utils.function import (
     make_pad_mask,
-    mask_fill
+    mask_fill,
+    spy
 )
 from espnet_onnx.utils.config import Config
 
@@ -82,6 +83,7 @@ class Encoder:
             feats = mask_fill(feats, make_pad_mask(feat_length, feats, 1), 0.0)
         return feats, feat_length
 
+    @spy('encoder', 1, ndim=2)
     def forward_encoder(self, feats, feat_length):
         encoder_out, encoder_out_lens = \
             self.encoder.run(["encoder_out", "encoder_out_lens"], {

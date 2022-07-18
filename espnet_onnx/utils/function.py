@@ -336,3 +336,55 @@ def end_detect(ended_hyps, i, M=3, D_end=np.log(1 * np.exp(-10))):
         return True
     else:
         return False
+
+
+
+import time
+from pathlib import Path
+from memory_profiler import memory_usage
+import sys
+
+LOG_DIR = Path.home() / ".cache" / "espnet_onnx" / "log"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+def spy(process_name, arg_idx, ndim):
+    # This is a decorator for a function to check memory usage and computation time and log them into a file.
+    log_file = LOG_DIR / "full.log"
+    def _deco_tag(func):
+        def wrapper(*args, **kwargs):
+            arr = args[arg_idx]
+            
+            if ndim == 2:
+                B = arr.shape[0]
+                T = 0
+            elif ndim == 3:
+                B = arr.shape[0]
+                T = arr.shape[1]
+            elif ndim == -1 and arg_idx == -1:
+                B = 0
+                T = 0
+            else:
+                raise ValueError('ndim must be 2 or 3')
+            
+            start_time = time.time()
+            
+            # compute memory usage in Mb list
+            mem_usage = memory_usage((func, args, kwargs), interval=0.005)
+            
+            end_time = time.time()
+            elapsed_time = end_time - start_time
+            memory_increased = mem_usage[-1] - mem_usage[0]
+            max_memory_usage = max(mem_usage) - mem_usage[0]
+            
+            # input bytes
+            input_bytes = sys.getsizeof(arr)
+                       
+            with open(log_file, 'a') as f:
+                f.write(f'{process_name},{B},{T},{input_bytes},{memory_increased},{max_memory_usage},{elapsed_time}\n')
+                f.flush()
+                
+            return func(*args, **kwargs)
+        return wrapper
+    return _deco_tag
+
+

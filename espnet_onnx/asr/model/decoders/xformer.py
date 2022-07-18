@@ -10,7 +10,7 @@ import onnxruntime
 
 from espnet_onnx.asr.scorer.interface import BatchScorerInterface
 from espnet_onnx.asr.beam_search.hyps import TransducerHypothesis
-from espnet_onnx.utils.function import subsequent_mask
+from espnet_onnx.utils.function import subsequent_mask, spy
 from espnet_onnx.utils.config import Config
 
 
@@ -77,17 +77,22 @@ class XformerDecoder(BatchScorerInterface):
             ]
 
         # batch decoding
+        logp, states = self.compute_decoder(ys, xs, batch_state)
+
+        # transpose state of [layer, batch] into [batch, layer]
+        state_list = [[states[i][b]
+                       for i in range(self.n_layers)] for b in range(n_batch)]
+        return logp, state_list
+    
+    @spy('decoder', 1, ndim=2)
+    def compute_decoder(self, ys, xs, batch_state):
         input_dict = self.get_input_dict(ys, xs, batch_state)
         
         logp, *states = self.decoder.run(
             ['y'] + self.out_caches,
             input_dict
         )
-
-        # transpose state of [layer, batch] into [batch, layer]
-        state_list = [[states[i][b]
-                       for i in range(self.n_layers)] for b in range(n_batch)]
-        return logp, state_list
+        return logp, states
 
     def get_input_dict(self, ys, xs, state):
         in_names = [d.name for d in self.decoder.get_inputs() if 'cache' not in d.name]

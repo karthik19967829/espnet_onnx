@@ -52,7 +52,7 @@ class ContextualBlockXformerEncoder(nn.Module, AbsExportModel):
             # d is EncoderLayer
             if isinstance(d.self_attn, MultiHeadedAttention):
                 d.self_attn = OnnxMultiHeadedAttention(d.self_attn)
-            self.encoders[i] = OnnxEncoderLayer(d)
+            # self.encoders[i] = OnnxEncoderLayer(d)
         
         if self.normalize_before:
             self.after_norm = model.after_norm

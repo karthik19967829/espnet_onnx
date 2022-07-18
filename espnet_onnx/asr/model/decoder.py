@@ -5,8 +5,10 @@ from espnet_onnx.utils.config import Config
 from espnet_onnx.asr.model.decoders.rnn import RNNDecoder
 from espnet_onnx.asr.model.decoders.xformer import XformerDecoder
 from espnet_onnx.asr.model.decoders.transducer import TransducerDecoder
+from espnet_onnx.utils.function import spy
 
 
+@spy('load_decoder', -1, -1)
 def get_decoder(config: Config, providers: List[str], use_quantized: bool = False):
     if config.dec_type == 'RNNDecoder':
         return RNNDecoder(config, providers, use_quantized)
