@@ -59,12 +59,14 @@ def get_trans_beam_config(model):
 
 
 def get_token_config(model):
-    return {
+    ret = {
         "sos": model.sos,
         "eos": model.eos,
-        "blank": model.blank_id,
         "list": model.token_list
     }
+    if hasattr(model, "blank"):
+        ret.update(blank=blank_id)
+    return ret
 
 
 def get_tokenizer_config(model, path):
