@@ -101,11 +101,11 @@ class StreamingEncoder:
 
     def get_input_dict(self, x: np.ndarray, state: Dict[str, np.ndarray]):
         # x.length : hop_size * subsample + 1
-        mask = np.zeros(
-            (1, 1, self.config.block_size + 2, self.config.block_size + 2),
-            dtype=np.float32
+        mask = np.ones(
+            (1, self.config.block_size + 2, self.config.block_size + 2),
+            dtype=np.int32
         )
-        mask[..., 1:, :-1] = 1
+        mask[1:, :-1] = 0
         if self.n_processed_blocks == 0:
             start = 0
             indicies = np.array([

@@ -21,7 +21,7 @@ from espnet2.asr.frontend.default import DefaultFrontend
 from espnet2.layers.global_mvn import GlobalMVN
 from espnet2.layers.utterance_mvn import UtteranceMVN
 from espnet_onnx.export.asr.get_config import get_frontend_config, get_norm_config
-from ..encoder_layer import OnnxEncoderLayer
+from ..contextual_encoder_layer import OnnxContextualEncoderLayer
 from ..multihead_att import OnnxMultiHeadedAttention
 
 from espnet_onnx.utils.abs_model import AbsExportModel
@@ -49,12 +49,12 @@ class ContextualBlockXformerEncoder(nn.Module, AbsExportModel):
         self.subsample = model.subsample
         
         self.normalize_before = model.normalize_before
-        self.encoders = model.encoders
-        for i, d in enumerate(self.encoders):
+        self.encoders = nn.ModuleList([])
+        for i, d in enumerate(model.encoders):
             # d is EncoderLayer
             if isinstance(d.self_attn, MultiHeadedAttention):
                 d.self_attn = OnnxMultiHeadedAttention(d.self_attn)
-            # self.encoders[i] = OnnxEncoderLayer(d)
+            self.encoders.append(OnnxContextualEncoderLayer(d))
         
         if self.normalize_before:
             self.after_norm = model.after_norm
@@ -68,6 +68,8 @@ class ContextualBlockXformerEncoder(nn.Module, AbsExportModel):
         self.overlap_size = self.block_size - self.hop_size
         self.offset = self.block_size - self.look_ahead - self.hop_size
         self.xscale = model.pos_enc.xscale
+        self.num_heads = model.encoders[0].self_attn.h
+        self.hidden_size = model.encoders[0].self_attn.linear_out.out_features
         
         # for export configuration
         self.feats_dim = feats_dim
@@ -86,7 +88,11 @@ class ContextualBlockXformerEncoder(nn.Module, AbsExportModel):
 
     def output_size(self) -> int:
         return self._output_size
-
+    
+    def prepare_mask(self, mask):
+        mask = 1 - mask.type(torch.float32)[:, None, :]
+        return mask * -10000
+    
     def forward(
         self,
         xs_pad: torch.Tensor,
@@ -132,13 +138,16 @@ class ContextualBlockXformerEncoder(nn.Module, AbsExportModel):
         
         xs_pad = xs_pad * self.xscale + pos_enc_xs 
         xs_chunk = torch.cat([prev_addin, xs_pad, addin], dim=1)
+        
+        mask = self.prepare_mask(mask)
 
-        ys_chunk, _, _, _, past_encoder_ctx, _, _ = self.encoders(
-            xs_chunk.unsqueeze(1), mask, True, past_encoder_ctx
-        )
+        for l in self.encoders:
+            xs_chunk, _, past_encoder_ctx, *_= l(
+                xs_chunk, mask, past_encoder_ctx
+            )
 
         # remove addin
-        ys_chunk = ys_chunk.squeeze(1)[:, 1:-1]
+        ys_chunk = xs_chunk[:, 1:-1]
         ys_pad = ys_chunk[:, indicies[0] : indicies[1]]
 
         if self.normalize_before:
@@ -156,10 +165,13 @@ class ContextualBlockXformerEncoder(nn.Module, AbsExportModel):
     def get_output_size(self):
         return self._output_size
 
+    def is_optimizable(self):
+        return True
+
     def get_dummy_inputs(self):
         n_feats = self.feats_dim
         xs_pad = torch.randn(1, self.hop_size*self.subsample, n_feats)
-        mask = torch.ones(1, 1, self.block_size + 2, self.block_size + 2)
+        mask = torch.ones(1, self.block_size + 2, self.block_size + 2).type(torch.int32)
         o = self.compute_embed(xs_pad)
         buffer_before_downsampling = torch.randn(1, self.subsample, n_feats)
         buffer_after_downsampling = torch.randn(1, self.overlap_size, o.shape[-1])
@@ -182,7 +194,7 @@ class ContextualBlockXformerEncoder(nn.Module, AbsExportModel):
     def get_dynamic_axes(self):
         return {
             'xs_pad': { 1: 'xs_pad_length' },
-            'mask': { 2: 'block_height', 3: 'block_width' },
+            'mask': { 0: 'block_height', 1: 'block_width' },
             'buffer_before_downsampling': { 1: 'bbd_length' },
             'buffer_after_downsampling': { 1: 'bad_length' },
             'pos_enc_xs': { 1: 'pex_length' },
