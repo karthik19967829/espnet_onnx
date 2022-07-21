@@ -39,7 +39,7 @@ def get_encoder(model, frontend, preencoder, export_config):
     if isinstance(model, espnetRNNEncoder) or isinstance(model, espnetVGGRNNEncoder):
         return RNNEncoder(model, preencoder, **export_config)
     elif isinstance(model, espnetContextualTransformer) or isinstance(model, espnetContextualConformer):
-        return ContextualBlockXformerEncoder(model, preencoder, **export_config)
+        return ContextualBlockXformerEncoder(model, frontend, preencoder, **export_config)
     elif isinstance(model, espnetTransformerEncoder):
         return TransformerEncoder(model, frontend, preencoder, **export_config)
     elif isinstance(model, espnetConformerEncoder):

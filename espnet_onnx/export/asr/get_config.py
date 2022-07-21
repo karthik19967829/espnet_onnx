@@ -96,21 +96,21 @@ def get_tokenizer_config(model, path):
         }
 
 
-def get_frontend_config(asr_frontend_model, frontend=None, **kwargs):
+def get_frontend_config(asr_frontend_model, frontend=None, stft_center=True, **kwargs):
     # currently only default config is supported.
     if isinstance(asr_frontend_model, S3prlFrontend):
         frontend_config = frontend.get_model_config(**kwargs)
     elif isinstance(asr_frontend_model, DefaultFrontend):
-        frontend_config = get_default_frontend(asr_frontend_model)
+        frontend_config = get_default_frontend(asr_frontend_model, stft_center)
     else:
         raise ValueError('Currently only s3prl is supported.')
     
     return frontend_config    
 
-def get_default_frontend(frontend, **kwargs):
+def get_default_frontend(frontend, stft_center, **kwargs):
     return {
         "frontend_type": "default",
-        "stft": get_stft_config(frontend.stft, **kwargs),
+        "stft": get_stft_config(frontend.stft, stft_center, **kwargs),
         "logmel": get_logmel_config(frontend.logmel, **kwargs),
     }
 

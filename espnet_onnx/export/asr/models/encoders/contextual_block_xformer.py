@@ -33,12 +33,14 @@ class ContextualBlockXformerEncoder(nn.Module, AbsExportModel):
     def __init__(
         self,
         model,
+        frontend,
         preencoder=None,
         feats_dim=80,
         **kwargs
     ):
         super().__init__()
         self.model = model
+        self.frontend = frontend
         self.model_name = 'xformer_encoder'
         self._output_size = model._output_size
         self.pos_enc = model.pos_enc
@@ -69,9 +71,18 @@ class ContextualBlockXformerEncoder(nn.Module, AbsExportModel):
         
         # for export configuration
         self.feats_dim = feats_dim
+        self.get_frontend(kwargs)
         self.preencoder = None
         if preencoder is not None:
             self.preencoder = preencoder
+    
+    def get_frontend(self, kwargs):
+        from espnet_onnx.export.asr.models import get_frontend_models
+        self.frontend_model = get_frontend_models(self.frontend, kwargs)
+        if self.frontend_model is not None:
+            self.submodel = []
+            self.submodel.append(self.frontend_model)
+            self.feats_dim = self.frontend_model.output_dim
 
     def output_size(self) -> int:
         return self._output_size
