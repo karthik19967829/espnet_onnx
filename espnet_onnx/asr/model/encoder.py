@@ -2,10 +2,8 @@ from typing import List
 from espnet_onnx.utils.config import Config
 from espnet_onnx.asr.model.encoders.encoder import Encoder
 from espnet_onnx.asr.model.encoders.streaming import StreamingEncoder
-from espnet_onnx.utils.function import spy
 
 
-@spy('load_encoder', -1, -1)
 def get_encoder(config: Config, providers: List[str], use_quantized: bool = False):
     if config.enc_type == 'ContextualXformerEncoder':
         return StreamingEncoder(config, providers, use_quantized)

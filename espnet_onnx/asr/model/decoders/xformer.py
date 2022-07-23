@@ -10,7 +10,7 @@ import onnxruntime
 
 from espnet_onnx.asr.scorer.interface import BatchScorerInterface
 from espnet_onnx.asr.beam_search.hyps import TransducerHypothesis
-from espnet_onnx.utils.function import subsequent_mask, spy
+from espnet_onnx.utils.function import subsequent_mask
 from espnet_onnx.utils.config import Config
 
 
@@ -84,7 +84,6 @@ class XformerDecoder(BatchScorerInterface):
                        for i in range(self.n_layers)] for b in range(n_batch)]
         return logp, state_list
     
-    @spy('decoder', 1, ndim=2)
     def compute_decoder(self, ys, xs, batch_state):
         input_dict = self.get_input_dict(ys, xs, batch_state)
         

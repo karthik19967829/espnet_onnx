@@ -8,7 +8,7 @@ import onnxruntime
 from scipy.special import log_softmax
 
 from espnet_onnx.asr.scorer.interface import BatchScorerInterface
-from espnet_onnx.utils.function import subsequent_mask, spy
+from espnet_onnx.utils.function import subsequent_mask
 
 
 class TransformerLM(BatchScorerInterface):
@@ -107,7 +107,6 @@ class TransformerLM(BatchScorerInterface):
                        for i in range(self.nlayers)] for b in range(n_batch)]
         return logp, state_list
 
-    @spy('transformer_lm', 1, ndim=2)
     def compute_lm(self, ys, batch_state):
         input_dic = {'tgt': ys}
         input_dic.update({
