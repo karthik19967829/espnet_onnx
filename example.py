@@ -9,7 +9,7 @@ wav_file = '029f6450-447a-11e9-a9a5-5dbec3b8816a.wav'
 audio, sr = librosa.load(wav_file)
 
 # espnet load from pretrained
-espnet_model = EspnetSpeech2Text.from_pretrained(tag)
+'''espnet_model = EspnetSpeech2Text.from_pretrained(tag)
 
 print('running regular inference')
 start_time = time.time()
@@ -19,7 +19,7 @@ latency = time.time() - start_time
 print(f'transcript={transcript}, latency={latency}')
 
 m = ASRModelExport()
-m.export(espnet_model, tag)
+m.export(espnet_model, tag)'''
 
 # onnx export
 onnx_model = Speech2Text(tag_name=tag)

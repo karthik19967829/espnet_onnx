@@ -1,9 +1,7 @@
-from typing import (
-    Union,
-    Dict,
-)
+from typing import Union, Dict
 from pathlib import Path
 from typeguard import check_argument_types
+
 import os
 import glob
 from datetime import datetime
@@ -18,26 +16,31 @@ from onnxruntime.quantization import quantize_dynamic
 from espnet2.bin.asr_inference import Speech2Text
 from espnet2.text.sentencepiece_tokenizer import SentencepiecesTokenizer
 from espnet_model_zoo.downloader import ModelDownloader
-
-from espnet_onnx.export.asr.models import (
+from espnet_onnx.utils.torch_function import subsequent_mask
+from .models import (
     get_encoder,
     get_decoder,
     get_lm,
+    RNNDecoder,
+    PreDecoder,
     CTC,
     JointNetwork,
+    get_frontend_models,
 )
-from espnet_onnx.export.asr.get_config import (
+from .get_config import (
     get_ngram_config,
     get_beam_config,
     get_token_config,
     get_tokenizer_config,
     get_weights_transducer,
     get_trans_beam_config,
+    get_frontend_config,
 )
 from espnet_onnx.utils.config import (
     save_config,
     update_model_path
 )
+
 from espnet_onnx.export.optimize.optimizer import optimize_model
 
 
@@ -54,6 +57,64 @@ class ASRModelExport:
             float16=False,
             use_ort_for_espnet=False,
         )
+
+    def get_output_size(self,model):
+        return model.encoders[0].size
+
+    def prepare_mask(self, mask):
+        '''if len(mask.shape) == 2:
+            mask = mask[:, None, None, :]
+        elif len(mask.shape) == 3:
+            mask = mask[:, None, :]'''
+        mask = 1 - mask
+        return mask * -10000.0    
+
+    def get_dummy_inputs_decoder(self, model, enc_size):
+        tgt = torch.LongTensor([0,0]).unsqueeze(0)
+        print("tgt shape",tgt.shape)
+        enc_out = torch.randn(1, 100, enc_size)
+        cache = [
+            torch.zeros((1, 1, model.decoders[0].size))
+            for _ in range(len(model.decoders))
+        ]
+        print("enocoder out",enc_out.shape)
+        print("cache size",len(cache))
+        print("cache 0",cache[0].shape)
+        #mask = subsequent_mask(tgt.size(-1)).unsqueeze(0) # (B, T)
+        #mask = self.prepare_mask(mask) 
+        mask = torch.BoolTensor(1,2,1)
+        print("mask shape",mask.shape)
+        return (tgt,mask,enc_out,cache)
+
+    def get_dummy_inputs_encoder(self,feats_dim=80):
+        feats = torch.randn(1, 100, feats_dim)
+        return (feats),torch.ones(feats[:, :, 0].shape).sum(dim=-1).type(torch.long)        
+
+    def get_model_config(self, asr_model=None, path=None):
+        ret = {}
+        ret.update(
+            enc_type='XformerEncoder',
+            model_path=os.path.join(path, 'xformer_encoder.onnx'),
+            is_vggrnn=False,
+            frontend=get_frontend_config(asr_model.frontend, self.frontend_model, path=path),
+            do_normalize=asr_model.normalize is not None,
+            do_postencoder=asr_model.postencoder is not None
+        )
+        if ret['do_normalize']:
+            ret.update(normalize=get_norm_config(
+                asr_model.normalize, path))
+        # Currently postencoder is not supported.
+        # if ret['do_postencoder']:
+        #     ret.update(postencoder=get_postenc_config(self.model.postencoder))
+        return ret
+    
+    def get_dec_model_config(self, model, path):
+        return {
+            "dec_type": "XformerDecoder",
+            "model_path": os.path.join(path, f'xformer_decoder.onnx'),
+            "n_layers": len(model.decoders),
+            "odim": model.decoders[0].size
+        }
 
     def export(
         self,
@@ -77,23 +138,28 @@ class ASRModelExport:
         self._copy_files(model, base_dir, verbose)
 
         model_config = self._create_config(model, export_dir)
-
+        #call replace to all modules at once 
+         
         # export encoder
-        enc_model = get_encoder(
+        enc_model = model.asr_model.encoder
+        '''enc_model = get_encoder(
             model.asr_model.encoder,
             model.asr_model.frontend,
             model.asr_model.preencoder,
             self.export_config
-        )
-        enc_out_size = enc_model.get_output_size()
+        )'''
+        
+        enc_out_size = self.get_output_size(enc_model)
         self._export_encoder(enc_model, export_dir, verbose)
-        model_config.update(encoder=enc_model.get_model_config(
+        model_config.update(encoder=self.get_model_config(
             model.asr_model, export_dir))
 
         # export decoder
-        dec_model = get_decoder(model.asr_model.decoder, self.export_config)
+        dec_model = model.asr_model.decoder
+        dec_model.forward = dec_model.forward_one_step
+        #dec_model = get_decoder(model.asr_model.decoder, self.export_config)
         self._export_decoder(dec_model, enc_out_size, export_dir, verbose)
-        model_config.update(decoder=dec_model.get_model_config(export_dir))
+        model_config.update(decoder=self.get_dec_model_config(dec_model,export_dir))
         
         # export joint_network if transducer decoder is used.
         if model.asr_model.use_transducer_decoder:
@@ -215,13 +281,79 @@ class ASRModelExport:
         ret.update(tokenizer=get_tokenizer_config(model.tokenizer, path))
         return ret
     
-    def _export_model(self, model, verbose, path, enc_size=None):
-        if enc_size:
+    def get_enc_input_names(self):
+        return ['feats']
+
+    def get_enc_output_names(self):
+        return ['encoder_out', 'encoder_out_lens']
+
+    def get_enc_dynamic_axes(self):
+        return {
+            'feats': {
+                1: 'feats_length'
+            },
+            'encoder_out': {
+                1: 'enc_out_length'
+            }
+        }
+
+    def get_dec_input_names(self,model):
+        return ['tgt', 'memory'] \
+            + ['cache_%d' % i for i in range(len(model.decoders))]
+
+    def get_dec_output_names(self,model):
+        return ['y'] \
+            + ['out_cache_%d' % i for i in range(len(model.decoders))]
+
+    def get_dec_dynamic_axes(self,model):
+        ret = {
+            'tgt': {
+                0: 'tgt_batch',
+                1: 'tgt_length'
+            },
+            'memory': {
+                0: 'memory_batch',
+                1: 'memory_length'
+            }
+        }
+        ret.update({
+            'cache_%d' % d: {
+                0: 'cache_%d_batch' % d,
+                1: 'cache_%d_length' % d
+            }
+            for d in range(len(model.decoders))
+        })
+        return ret
+    
+    def _export_model(self,model, verbose, path, enc_size=None,model_type ="encoder"):
+        if model_type=="transformer_decoder":
+            dummy_input = self.get_dummy_inputs_decoder(model,enc_size)
+            torch.onnx.export(
+            model,
+            dummy_input,
+            os.path.join(path, f'xformer_decoder.onnx'),
+            verbose=verbose,
+            opset_version=15,
+            input_names=self.get_dec_input_names(model),
+            output_names=self.get_dec_output_names(model),
+            dynamic_axes=self.get_dec_dynamic_axes(model)
+        )
+        elif model_type=="encoder":
+            dummy_input = self.get_dummy_inputs_encoder()
+            torch.onnx.export(
+            model,
+            dummy_input,
+            os.path.join(path, f'xformer_encoder.onnx'),
+            verbose=verbose,
+            opset_version=15,
+            input_names=self.get_enc_input_names(),
+            output_names=self.get_enc_output_names(),
+            dynamic_axes=self.get_enc_dynamic_axes()
+        )
+
+        elif model_type=="ctc_decoder":
             dummy_input = model.get_dummy_inputs(enc_size)
-        else:
-            dummy_input = model.get_dummy_inputs()
-            
-        torch.onnx.export(
+            torch.onnx.export(
             model,
             dummy_input,
             os.path.join(path, f'{model.model_name}.onnx'),
@@ -230,7 +362,10 @@ class ASRModelExport:
             input_names=model.get_input_names(),
             output_names=model.get_output_names(),
             dynamic_axes=model.get_dynamic_axes()
-        )
+            )
+
+
+            #dummy_input = model.get_dummy_inputs()
         
         # export submodel if required
         if hasattr(model, 'submodel'):
@@ -241,7 +376,7 @@ class ASRModelExport:
     def _export_encoder(self, model, path, verbose):
         if verbose:
             logging.info(f'Encoder model is saved in {file_name}')
-        self._export_model(model, verbose, path)
+        self._export_model(model, verbose, path,model_type="encoder")
     
     def _export_frontend(self, model, path, verbose):
         if verbose:
@@ -251,12 +386,12 @@ class ASRModelExport:
     def _export_decoder(self, model, enc_size, path, verbose):
         if verbose:
             logging.info(f'Decoder model is saved in {file_name}')
-        self._export_model(model, verbose, path, enc_size)
+        self._export_model(model, verbose, path, enc_size,model_type="transformer_decoder")
 
     def _export_ctc(self, model, enc_size, path, verbose):
         if verbose:
             logging.info(f'CTC model is saved in {file_name}')
-        self._export_model(model, verbose, path, enc_size)
+        self._export_model(model, verbose, path, enc_size,model_type="ctc_decoder")
 
     def _export_lm(self, model, path, verbose):
         if verbose:
@@ -313,8 +448,7 @@ class ASRModelExport:
                 op_types_to_quantize=op_types_to_quantize
             )
             ret[basename] = export_file
-            if os.path.exists(os.path.join(model_from, basename + '-opt.onnx')):
-                os.remove(os.path.join(model_from, basename + '-opt.onnx'))
+            os.remove(os.path.join(model_from, basename + '-opt.onnx'))
         return ret
 
     def _optimize_model(self, model, model_dir, model_type):

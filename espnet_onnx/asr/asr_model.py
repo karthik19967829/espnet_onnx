@@ -33,6 +33,8 @@ class Speech2Text(AbsASRModel):
         
         # check onnxruntime version and providers
         self._check_ort_version(providers)
+
+       #print("config:", self.config)
         
         # check if model is exported for streaming.
         if self.config.encoder.enc_type == 'ContextualXformerEncoder':

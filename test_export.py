@@ -33,7 +33,7 @@ dummy_input = (torch.randn(1, audio_len, feats_dim), [audio_len])
 # dummy_input = ((dummy_feats),torch.ones(dummy_feats[:, :, 0].shape).sum(dim=-1).type(torch.long))
 
 # Actual input
-# dummy_input = (feats, feats_lens)
+#dummy_input = (feats, feats_lens)
 
 torch.onnx.export(
     espnet_model.asr_model.encoder,
